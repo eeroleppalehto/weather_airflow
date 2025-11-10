@@ -54,6 +54,47 @@ def validate_pre_aggragated_data(df: DataFrame) -> DataFrame:
 
     return df
 
+def generate_daily_averages(df: DataFrame) -> DataFrame:
+    """Generate a daily average report with Humidity, Temperature (C), Wind Speed (km/h) columns
+
+    Args:
+        df (DataFrame): Cleaned and validated DataFrame with weather history data
+
+    Returns:
+        DataFrame: Daily average report with Humidity, Temperature (C), Wind Speed (km/h)
+    """
+
+    valid_humidity = df[df["is_valid_humidity"]]
+    valid_temparuture = df[df["is_valid_temp_c"]]
+    valid_wind_speed = df[df["is_valid_wind_speed"]]
+
+    daily_humidity = valid_humidity["Humidity"].resample("D").mean()
+    daily_temparuture = valid_temparuture["Temperature (C)"].resample("D").mean()
+    daily_wind_speed = valid_wind_speed["Wind Speed (km/h)"].resample("D").mean()
+
+    data = {
+        "Humidity": daily_humidity,
+        "Temperature (C)": daily_temparuture,
+        "Wind Speed (km/h)": daily_wind_speed
+    }
+    daily_averages_df = pd.DataFrame(data)
+
+    return daily_averages_df
+
+def get_monthly_precipitation_type(df: DataFrame) -> DataFrame:
+    """Create DataFrame with mode of the precipitation type by month
+
+    Args:
+        df (DataFrame): Cleaned and validated DataFrame with weather history data
+
+
+    Returns:
+        DataFrame: DataFrame with mode of the precipitation type by month
+    """
+    monthly_df = df[["Precip Type"]].resample("ME").agg(pd.Series.mode)
+    return monthly_df
+
+
 if __name__ == "__main__":
     TEMP_PATH = Path() / "tmp"
     FILE_NAME = "weatherHistory.csv"
@@ -61,3 +102,15 @@ if __name__ == "__main__":
     
     df = read_and_index_data(path_to_file)
     df = clean_data(df)
+    df = validate_pre_aggragated_data(df)
+
+    daily_averages_df = generate_daily_averages(df)
+    monthly_precipitation_type_df = get_monthly_precipitation_type(df)
+
+    print("----------DF----------")
+    print(df.head())
+    print("----------DAILY DF----------")
+    print(daily_averages_df.head())
+    print("----------MONTHLY DF----------")
+    print(monthly_precipitation_type_df.head())
+    
