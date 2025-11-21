@@ -11,6 +11,20 @@ from airflow.operators.python import PythonOperator
 from airflow.utils.trigger_rule import TriggerRule
 from sqlalchemy import create_engine
 
+default_args = {
+	'owner': 'turbo_team',
+	'start_date': datetime(2025, 11, 21),
+	'depends_on_past': False,
+	'retries': 1,
+	'retry_delay': timedelta(minutes=5),
+}
+
+dag = DAG(
+	'Historical_Weather_Teamwork',
+	default_args = default_args,
+	schedule_interval = '@daily',
+	catchup = False,
+)
 
 
 #==========
@@ -540,7 +554,7 @@ def load_weather(**kwargs):
 
 #extract_task
 
-#clean_task?
+#clean_task
  
 transform_task = PythonOperator(
         task_id='transform_task',
