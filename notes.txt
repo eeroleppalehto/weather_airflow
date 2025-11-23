@@ -7,12 +7,13 @@ daily
 - humidity
 - wind_speed_kmh
 - visibility_km
-- pressure_millbars
-- wind_strength
+- pressure_millbars             (^^should these be tranferred unprocessed from the
+                                   original csv file?)
+- wind_strength                 (is calculated - why not transferred to database?)
 
 monthly
-- avg_apparent_temperature_c
-- mode_precip_type
+- avg_apparent_temperature_c    (wasn't required in the assignment)
+- mode_precip_type              (this is calculated but not saved in DataFrame)
 
 ======================
 
@@ -28,53 +29,59 @@ Assignment criteria:
 
 Extraction
 
-    - Use the Kaggle API for data download and authentication. (1 point)
-    - Use Python’s zipfile library to handle any ZIP files. (1 point)
+    - Use the Kaggle API for data download and authentication. (1 point)    DONE
+    - Use Python’s zipfile library to handle any ZIP files. (1 point)       DONE
     - Use XCom to pass the DataFrame or file path to the next step in the 
-      pipeline. (1 point)
+      pipeline. (1 point)                                                   DONE
 
 Transformation:
 
     Cleaning
-    - Convert Formatted Date to a proper date format. (1 point)
-    - Handle any missing or erroneous data in critical columns (Temperature (C),
-      Humidity, WindSpeed (km/h), etc.). (1 point)
-    - Check for duplicates and remove them if necessary. (1 point)
+    - Convert Formatted Date to a proper date format. (1 point)             DONE (in transform task)
+    - Handle any missing or erroneous data in critical columns 
+      (Temperature (C), Humidity, WindSpeed (km/h), etc.). (1 point)        DONE
+    - Check for duplicates and remove them if necessary. (1 point)          DONE
 
     Feature engineering:
-    - Calculate daily averages for temperature, humidity, and wind speed. (1 point)
-    - Group data by month and calculate the mode of Precip Type for each month. 
-      If there’s noclear mode (multiple types with the same frequency), mark it 
-      as NaN. (1 point)
-    - Save this information in a new column, called Mode Precip Type. (1 point)
-    - Add a new feature called wind_strength, categorizing wind speeds: (1 point)
-    - Calculate monthly averages for temperature, humidity, wind speed, visibility, 
-      and pressure. (1point)
-    - Save daily and monthly transformed data into new CSV files. (1 point)
-    - Use XCom to pass transformed daily and monthly data to the validation step. 
+    - Calculate daily averages for temperature, humidity, and wind speed.   DONE   
       (1 point)
+    - Group data by month and calculate the mode of Precip Type for each    ! "mark it as NaN"
+      month. If there’s no clear mode (multiple types with the same 
+      frequency), mark it as NaN. (1 point)
+    - Save this information in a new column, called Mode Precip Type.       ! missing
+      (1 point)
+    - Add a new feature called wind_strength, categorizing wind speeds:     DONE 
+      (1 point)
+    - Calculate monthly averages for temperature, humidity, wind speed,     DONE (wind speed is not included in the database monthly table?)
+      visibility, and pressure. (1 point)
+    - Save daily and monthly transformed data into new CSV files. (1 point) DONE
+    - Use XCom to pass transformed daily and monthly data to the            DONE
+      validation step. (1 point)
 
 Validation:
 
-    - Ensure there are no missing values in critical fields and the new ones
-      (Temperature (C),Humidity, Wind Speed (km/h), etc.). (1 point)
-    - Verify that values fall within expected ranges: (1 point)
-    - Identify and log any extreme outliers in data. For instance, flag temperatures 
-      that areoutside expected seasonal ranges. (1 point)
-    - Use a trigger rule (all_success) to ensure validation only proceeds if all prior 
-      steps aresuccessful. (1 point)
-    - Only proceed to the load step if validation passes successfully. (1 point)
+    - Ensure there are no missing values in critical fields and the new     DONE
+      ones (Temperature (C),Humidity, Wind Speed (km/h), etc.). (1 point)
+    - Verify that values fall within expected ranges: (1 point)             DONE
+    - Identify and log any extreme outliers in data. For instance, flag     DONE !"Outliers detected: 4811 rows." <- fails task
+      temperatures that are outside expected seasonal ranges. (1 point)
+    - Use a trigger rule (all_success) to ensure validation only proceeds   DONE
+      if all prior steps are successful. (1 point)
+    - Only proceed to the load step if validation passes successfully.      DONE
+      (1 point)
 
 Loading:
 
-    - Load the transformed and validated data into a/an PostgreSQL/SQLite database with 
-      two tables,daily_weather and monthly_weather. (1 point)
-    - Daily Weather Table: .... (1 point)
-    - Monthly Weather Table: .... (1 point)
-    - Use XCom to pull the paths for daily and monthly transformed data files from the 
-      validation step and load the data into the respective tables. (1 point)
+    - Load the transformed and validated data into a/an PostgreSQL/SQLite 
+      database with two tables,daily_weather and monthly_weather. (1 point) DONE
+    - Daily Weather Table: .... (1 point)                                   DONE
+    - Monthly Weather Table: .... (1 point)                                 DONE
+    - Use XCom to pull the paths for daily and monthly transformed data     DONE !"from the validation step"
+      files from the validation step and load the data into the 
+      respective tables. (1 point)
 
 Airflow DAG Definition
 
-    - Define the ETL pipeline in Airflow with tasks for each ETL step, XCom for data 
-      passing, and appropriatedependencies and trigger rules. (6 points)
+    - Define the ETL pipeline in Airflow with tasks for each ETL step,      DONE
+      XCom for data passing, and appropriate dependencies and trigger 
+      rules. (6 points)
