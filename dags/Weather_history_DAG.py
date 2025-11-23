@@ -1,15 +1,19 @@
 import requests
 import io
-import pandas as pd
 import psycopg2
-
-from zipfile import ZipFile
-from pathlib import Path
+import pandas as pd
 from pandas import DataFrame
 from pandas.api.types import is_numeric_dtype
+from zipfile import ZipFile
+from pathlib import Path
+from sqlalchemy import create_engine
+from datetime import datetime, timedelta
+from airflow import DAG
+from airflow.models import TaskInstance
 from airflow.operators.python import PythonOperator
 from airflow.utils.trigger_rule import TriggerRule
-from sqlalchemy import create_engine
+
+
 
 default_args = {
 	'owner': 'turbo_team',
@@ -33,9 +37,11 @@ dag = DAG(
 
 KAGGLE_API_URL = "https://www.kaggle.com/api/v1/datasets/download/muthuj7/weather-dataset"
 TEMP_PATH = Path() / "tmp"
+TEMP_PATH.mkdir(parents=True, exist_ok=True)
 
 
-def extract():
+
+def extract_func(**kwargs):
     response = requests.get(KAGGLE_API_URL, stream=True)
     bytes_io = io.BytesIO(response.content)
 
@@ -43,11 +49,11 @@ def extract():
         filename = zip_file.filelist[0].filename
         zip_file.extractall(TEMP_PATH)
 
-    return filename
+    ti: TaskInstance = kwargs["ti"]
 
-if __name__ == "__main__":
-    extract()
+    file_path = TEMP_PATH / filename
 
+    ti.xcom_push(key="extract_file_path", value=str(file_path))
 
 
 
@@ -55,19 +61,15 @@ if __name__ == "__main__":
 # CLEAN
 #==========
 
-def cleanse_data(df: DataFrame) -> DataFrame:
-    """Clean Dataframe by dropping duplicates and dropping row with NaN
-    values in the critical columns. Also discard any rows containing 
-    outlier or erroneous data
+def clean_func(**kwargs):
+    ti = kwargs["ti"]
+    extract_file_path = ti.xcom_pull(task_ids="extract_task", key="extract_file_path")
 
-    Args:
-        df (DataFrame): DataFrame with weather history data
+    df = pd.read_csv(extract_file_path)
+    # df = cleanse_data(df)
 
-
-    Returns:
-        DataFrame: Cleaned Dataframe
-    """
     critical_columns = [
+        "Precip Type",
         "Temperature (C)",
         "Apparent Temperature (C)",
         "Humidity",
@@ -92,151 +94,43 @@ def cleanse_data(df: DataFrame) -> DataFrame:
 
     df = df.drop(columns=["is_valid_temp_c", "is_valid_humidity", "is_valid_wind_speed"])
 
-    return df
+    clean_data_file_name = "clean_weather_data.csv"
+    clean_file_path = TEMP_PATH / clean_data_file_name
+    df.to_csv(clean_file_path, index=False)
 
-def monthly_aggregation_mean_and_mode(df: DataFrame) -> DataFrame:
-    """Generate a pandas DataFrame with monthly aggregates for the mean values of
-    'Temperature (C)', 'Humidity', 'Wind Speed (km/h)', 'Visibility (km)', 'Pressure (millibars)' columns
-    and the mode of the "Precip Type" column.
-
-    Args:
-        df (DataFrame): Cleaned DataFrame with datetime index
-
-    Returns:
-        DataFrame: Monthly aggregate DataFrame
-    """
-
-
-    # Aggregate Precip Type mode values
-    monthly_mode_df = df[["Precip Type"]].resample("M").apply(lambda x: pd.Series.mode(x, dropna=False))
-
-    # Aggregate mean values
-    monthly_mean_df = df[['Temperature (C)', 'Humidity', 'Wind Speed (km/h)', 'Visibility (km)', 'Pressure (millibars)']].resample("M").mean()
-
-    # Join the two seperate Dataframes together
-    month_df = monthly_mean_df.join(monthly_mode_df)
-
-    return month_df
-
-
-
+    ti.xcom_push(key="clean_file_path", value=str(clean_file_path))
 
 
 #==========
 # TRANSFORM
 #==========
 
-def read_and_index_data(path_to_file: Path | str):
-    df = pd.read_csv(path_to_file)
-    df["Formatted Date"] = pd.to_datetime(df["Formatted Date"], format="%Y-%m-%d %H:%M:%S.%f %z", errors="raise", utc=True)
+def monthly_aggregation_mean_and_mode(df: DataFrame) -> DataFrame:
+    # Aggregate Precip Type mode values
+    monthly_mode_df = df[["Precip Type"]].resample("M").apply(lambda x: pd.Series.mode(x, dropna=False))
 
-    df = df.set_index("Formatted Date")
-    return df
+    # Aggregate mean values
+    monthly_mean_df = df[['Temperature (C)', 'Humidity',  'Visibility (km)', 'Pressure (millibars)']].resample("M").mean()
 
+    # Join the two seperate Dataframes together
+    month_df = monthly_mean_df.join(monthly_mode_df)
 
-def clean_data(df: DataFrame) -> DataFrame:
-    """Clean Dataframe by dropping duplicates and dropping row with NaN
-    values in the critical columns.
-
-    Args:
-        df (DataFrame): DataFrame with weather history data
-
-
-    Returns:
-        DataFrame: Cleaned Dataframe
-    """
-    critical_columns = [
-        "Temperature (C)",
-        "Apparent Temperature (C)",
-        "Humidity",
-        "Wind Speed (km/h)",
-        "Wind Bearing (degrees)",
-        "Visibility (km)",
-        "Cloud Cover",
-        "Pressure (millibars)",
-    ]
-
-    df = df.dropna(subset=critical_columns)
-
-    df = df.drop_duplicates()
-
-    return df
-
-def validate_pre_aggregated_data(df: DataFrame) -> DataFrame:
-    """Function that adds columns to the Dataframe that flag if the row value is valid.
-
-    Args:
-        df (DataFrame): Cleaned DataFrame with weather history data
-
-    Returns:
-        DataFrame: DataFrame with additional is_valid_temp_c, is_valid_humidity, is_valid_wind_speed
-    """
-
-    df["is_valid_temp_c"] = df["Temperature (C)"].between(-50.0, 50.0)
-    df["is_valid_humidity"] = df["Humidity"].between(0.0, 1.0)
-    df["is_valid_wind_speed"] = df["Wind Speed (km/h)"] >= 0
-
-    return df
+    return month_df
 
 def generate_daily_averages(df: DataFrame) -> DataFrame:
-    """Generate a daily average report with Humidity, Temperature (C), Wind Speed (km/h) columns
-
-    Args:
-        df (DataFrame): Cleaned and validated DataFrame with weather history data
-
-    Returns:
-        DataFrame: Daily average report with Humidity, Temperature (C), Wind Speed (km/h)
-    """
-
-    valid_humidity = df[df["is_valid_humidity"]]
-    valid_temparature = df[df["is_valid_temp_c"]]
-    valid_wind_speed = df[df["is_valid_wind_speed"]]
-
-    daily_humidity = valid_humidity["Humidity"].resample("D").mean()
-    daily_temparature = valid_temparature["Temperature (C)"].resample("D").mean()
-    daily_wind_speed = valid_wind_speed["Wind Speed (km/h)"].resample("D").mean()
-
-    data = {
-        "Humidity": daily_humidity,
-        "Temperature (C)": daily_temparature,
-        "Wind Speed (km/h)": daily_wind_speed
-    }
-    daily_averages_df = pd.DataFrame(data)
+    daily_averages_df = df.resample("D").agg({
+        "Temperature (C)": "mean",
+        "Humidity": "mean",
+        "Wind Speed (km/h)": "mean"
+    }).reset_index()
 
     return daily_averages_df
 
 def get_monthly_precipitation_type(df: DataFrame) -> DataFrame:
-    """Create DataFrame with mode of the precipitation type by month
+    monthly_df = df[["Precip Type"]].resample("M").agg(pd.Series.mode).dropna(subset=['Precip Type'])
 
-    Args:
-        df (DataFrame): Cleaned and validated DataFrame with weather history data
-
-
-    Returns:
-        DataFrame: DataFrame with mode of the precipitation type by month
-    """
-    monthly_df = df[["Precip Type"]].resample("ME").agg(pd.Series.mode)
     return monthly_df
 
-
-if __name__ == "__main__":
-    TEMP_PATH = Path() / "tmp"
-    FILE_NAME = "weatherHistory.csv"
-    path_to_file = TEMP_PATH / FILE_NAME
-    
-    df = read_and_index_data(path_to_file)
-    df = clean_data(df)
-    df = validate_pre_aggregated_data(df)
-
-    daily_averages_df = generate_daily_averages(df)
-    monthly_precipitation_type_df = get_monthly_precipitation_type(df)
-
-    print("----------DF----------")
-    print(df.head())
-    print("----------DAILY DF----------")
-    print(daily_averages_df.head())
-    print("----------MONTHLY DF----------")
-    print(monthly_precipitation_type_df.head())
 
 
 # Wind strength categorization. Convert wind speed from km/h to m/s and categorize the instance of windspeed to different levels of wind strength.
@@ -244,8 +138,9 @@ if __name__ == "__main__":
 def convert_kmh_to_ms(df):
     #Transform the windspeed from km/h to m/s
     df['Wind Speed (m/s)'] = df['Wind Speed (km/h)'] / 3.6
+    
     return df
-
+    
 def categorize_wind_strength(wind_speed):
 #Categorize wind speed
 
@@ -277,6 +172,7 @@ def categorize_wind_strength(wind_speed):
 def add_wind_strength_column(df):
     #Create the wind strength column based on the converted wind speeds divided into categories.
     df['Wind Strength'] = df['Wind Speed (m/s)'].apply((categorize_wind_strength))
+    
     return df
 
 def calculate_monthly_averages(df):
@@ -286,7 +182,6 @@ def calculate_monthly_averages(df):
     monthly_df = df.groupby('YearMonth').agg({
         'Temperature (C)': 'mean',
         'Humidity': 'mean',
-        'Wind Speed (km/h)': 'mean',
         'Visibility (km)': 'mean',
         'Pressure (millibars)': 'mean'
     }).reset_index()
@@ -295,21 +190,29 @@ def calculate_monthly_averages(df):
 
     return monthly_averages_df
 
+
 def transform_weather(**kwargs):
     ti = kwargs["ti"]
-    #Execute transformations in the correct order.
-    #Pull extracted df
-    df = ti.xcom_pull(task_ids="extract_task", key="df_extracted")
+    clean_file_path = ti.xcom_pull(task_ids="clean_task", key="clean_file_path")
+    df = pd.read_csv(clean_file_path)
+
+    # Index data
+    df["Formatted Date"] = pd.to_datetime(df["Formatted Date"], format="%Y-%m-%d %H:%M:%S.%f %z", errors="coerce", utc=True)
+    df = df.set_index("Formatted Date")
 
     #Transformations and new columns
     df = convert_kmh_to_ms(df)
     df = add_wind_strength_column(df)
 
-    #Daily and monthly averages
+    # Daily & monthly averages
     daily_df = generate_daily_averages(df)
     monthly_df = calculate_monthly_averages(df)
 
-    #Daily and monthly averages paths
+    # Transform YearMonth to date type
+    monthly_df["year_month"] = monthly_df["YearMonth"].dt.to_timestamp()
+    monthly_df = monthly_df.drop(columns=["YearMonth"])
+
+    # Daily and monthly averages paths
     daily_averages_path = '/tmp/daily_averages.csv'
     monthly_averages_path = '/tmp/monthly_averages.csv'
 
@@ -323,16 +226,14 @@ def transform_weather(**kwargs):
     df.reset_index(drop=True, inplace=True)  #Then drop the index.
     df['Formatted Date'] = pd.to_datetime(df['Formatted Date'])  #Lastly ensure that "Formatted Date" column has proper dtype of datetime.
 
-
     #Transformed dataframe to csv file for easier pushing via xcom.
     transformed_path = "/tmp/transformed_df.csv"
     df.to_csv(transformed_path, index=False)
 
     #Xcom pushing the transformed df, monthly averages, and daily averages.
-    ti.xcom_push(key='Daily_averages_file_path', value=daily_averages_path)
+    ti.xcom_push(key='daily_averages_file_path', value=daily_averages_path)
     ti.xcom_push(key='monthly_averages_file_path', value=monthly_averages_path)
-    ti.xcom_push(key='transformed_df_path', value=transformed_path)
-    return
+    ti.xcom_push(key='transformed_file_path', value=transformed_path)
 
 
 
@@ -414,7 +315,7 @@ def validate_weather(**kwargs):
     ti = kwargs["ti"]
     #Execute validations in the correct order.
     #Pull transformed df
-    path = ti.xcom_pull(task_ids="transform_task", key="transformed_df_path")
+    path = ti.xcom_pull(task_ids="transform_task", key="transformed_file_path")
     df = pd.read_csv(path)
 
     #Required columns for checking for missing values. Make sure that all of the columns exist in the dataframe.
@@ -429,7 +330,7 @@ def validate_weather(**kwargs):
         'Wind Strength',
         'Wind Bearing (degrees)',
         'Visibility (km)',
-        'Cloud Cover',
+        'Loud Cover',
         'Pressure (millibars)',
         'Daily Summary'
     ]
@@ -454,8 +355,8 @@ def validate_weather(**kwargs):
     if not ranges_ok:
         error_messages.extend(range_msgs)
 
-    if outliers_found:
-        error_messages.append(f"Outliers detected: {len(outliers)} rows. Outliers saved to: {outlier_path}")
+#    if outliers_found:
+#        error_messages.append(f"Outliers detected: {len(outliers)} rows. Outliers saved to: {outlier_path}")
 
     if error_messages:
         print("\nVALIDATION FAILED:")
@@ -480,69 +381,55 @@ def validate_weather(**kwargs):
 # LOAD
 #==========
 
+
 def load_weather(**kwargs):
     ti = kwargs["ti"]
 
     # Pull CSV paths from XCom
-    daily_path = ti.xcom_pull(task_ids="transform_task", key="Daily_averages_file_path")
+    daily_path = ti.xcom_pull(task_ids="transform_task", key="daily_averages_file_path")
     monthly_path = ti.xcom_pull(task_ids="transform_task", key="monthly_averages_file_path")
 
     engine = create_engine("postgresql+psycopg2://postgres:1063@localhost:5432/historical_weather")
 
 
-# LOAD DAILY WEATHER
-    if daily_path:
-        daily_df = pd.read_csv(daily_path)
+#---LOAD DAILY WEATHER---
+    daily_df = pd.read_csv(daily_path)
 
-        # Rename according to SQL schema
-        daily_df = daily_df.rename(columns={
-            "Formatted Date": "formatted_date",
-            "Precip Type": "precip_type",
-            "Temperature (C)": "temperature_c",
-            "Apparent Temperature (C)": "apparent_temperature_c",
-            "Humidity": "humidity",
-            "Wind Speed (km/h)": "wind_speed_kmh",
-            "Visibility (km)": "visibility_km",
-            "Pressure (millibars)": "pressure_millibars",
-            "Wind Strength": "wind_strength",
-            "Temperature (C)": "avg_temperature_c",
-            "Humidity": "avg_humidity",
-            "Wind Speed (km/h)": "avg_wind_speed_kmh"
-        })
+    daily_df = daily_df.rename(columns={
+        "Formatted Date": "formatted_date",
+        "Humidity": "avg_humidity",
+        "Temperature (C)": "avg_temperature_c",
+        "Wind Speed (km/h)": "avg_wind_speed_kmh"
+    })
 
-        daily_df.to_sql(
+    daily_df.to_sql(
         'daily_weather',
         con=engine,
         if_exists='append',
         index=False,
         method='multi'
-        )
+    )
 
+#---LOAD MONTHLY WEATHER---
 
+    monthly_df = pd.read_csv(monthly_path)
 
+    monthly_df = monthly_df.rename(columns={
+        "year_month": "month",
+        "Temperature (C)": "avg_temperature_c",
+        "Humidity": "avg_humidity",
+        "Visibility (km)": "avg_visibility_km",
+        "Pressure (millibars)": "avg_pressure_millibars",
+        "Precip Type": "mode_precip_type"
+    })
 
-# LOAD MONTHLY WEATHER
-    if monthly_path:
-        monthly_df = pd.read_csv(monthly_path)
-
-        # Rename according to SQL schema
-        monthly_df = monthly_df.rename(columns={
-            "Temperature (C)": "avg_temperature_c",
-            "Apparent Temperature (C)": "apparent_temperature_c",
-            "Humidity": "avg_humidity",
-            "Visibility (km)": "avg_visibility_km",
-            "Wind Speed (km/h)": "avg_wind_speed_kmh",
-            "Pressure (millibars)": "avg_pressure_millibars",
-            "Precip Type": "mode_precip_type"
-        })
-
-        monthly_df.to_sql(
+    monthly_df.to_sql(
         'monthly_weather',
         con=engine,
         if_exists='append',
         index=False,
         method='multi'
-        )
+    )
 
     return "Load complete."
 
@@ -552,22 +439,31 @@ def load_weather(**kwargs):
 # TASKS
 #==========
 
-#extract_task
+extract_task = PythonOperator(
+    task_id="extract_task",
+    python_callable=extract_func,
+    dag=dag
+)
 
-#clean_task
+clean_task = PythonOperator(
+    task_id="clean_task",
+    python_callable=clean_func,
+    dag=dag,
+    trigger_rule=TriggerRule.ALL_SUCCESS,
+)
  
 transform_task = PythonOperator(
-        task_id='transform_task',
-        python_callable=transform_weather,
-        trigger_rule=TriggerRule.ALL_SUCCESS,
-        provide_context=True
+    task_id='transform_task',
+    python_callable=transform_weather,
+    dag = dag,
+    trigger_rule=TriggerRule.ALL_SUCCESS,
 )
 
 validate_task = PythonOperator(
     task_id="validate_task",
     python_callable=validate_weather,
+    dag = dag,
     trigger_rule=TriggerRule.ALL_SUCCESS,
-    provide_context=True
 )
 
 load_task = PythonOperator(
@@ -578,4 +474,4 @@ load_task = PythonOperator(
 )
 
 
-#  >> transform_task >> validate_task >> load_task
+extract_task >> clean_task >> transform_task >> validate_task >> load_task

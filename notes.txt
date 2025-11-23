@@ -1,0 +1,80 @@
+Columns with no data in the database:
+
+daily
+- precip_type
+- temperature_c
+- apparent_temperature_c
+- humidity
+- wind_speed_kmh
+- visibility_km
+- pressure_millbars
+- wind_strength
+
+monthly
+- avg_apparent_temperature_c
+- mode_precip_type
+
+======================
+
+Outliers:
+
+    > there's a shit ton of outliers in the data, so unless something is 
+      done about it, outlier detection in validation task should probably
+      give only a warning message instead of error (which fails the task)
+
+======================
+
+Assignment criteria:
+
+Extraction
+
+    - Use the Kaggle API for data download and authentication. (1 point)
+    - Use Python’s zipfile library to handle any ZIP files. (1 point)
+    - Use XCom to pass the DataFrame or file path to the next step in the 
+      pipeline. (1 point)
+
+Transformation:
+
+    Cleaning
+    - Convert Formatted Date to a proper date format. (1 point)
+    - Handle any missing or erroneous data in critical columns (Temperature (C),
+      Humidity, WindSpeed (km/h), etc.). (1 point)
+    - Check for duplicates and remove them if necessary. (1 point)
+
+    Feature engineering:
+    - Calculate daily averages for temperature, humidity, and wind speed. (1 point)
+    - Group data by month and calculate the mode of Precip Type for each month. 
+      If there’s noclear mode (multiple types with the same frequency), mark it 
+      as NaN. (1 point)
+    - Save this information in a new column, called Mode Precip Type. (1 point)
+    - Add a new feature called wind_strength, categorizing wind speeds: (1 point)
+    - Calculate monthly averages for temperature, humidity, wind speed, visibility, 
+      and pressure. (1point)
+    - Save daily and monthly transformed data into new CSV files. (1 point)
+    - Use XCom to pass transformed daily and monthly data to the validation step. 
+      (1 point)
+
+Validation:
+
+    - Ensure there are no missing values in critical fields and the new ones
+      (Temperature (C),Humidity, Wind Speed (km/h), etc.). (1 point)
+    - Verify that values fall within expected ranges: (1 point)
+    - Identify and log any extreme outliers in data. For instance, flag temperatures 
+      that areoutside expected seasonal ranges. (1 point)
+    - Use a trigger rule (all_success) to ensure validation only proceeds if all prior 
+      steps aresuccessful. (1 point)
+    - Only proceed to the load step if validation passes successfully. (1 point)
+
+Loading:
+
+    - Load the transformed and validated data into a/an PostgreSQL/SQLite database with 
+      two tables,daily_weather and monthly_weather. (1 point)
+    - Daily Weather Table: .... (1 point)
+    - Monthly Weather Table: .... (1 point)
+    - Use XCom to pull the paths for daily and monthly transformed data files from the 
+      validation step and load the data into the respective tables. (1 point)
+
+Airflow DAG Definition
+
+    - Define the ETL pipeline in Airflow with tasks for each ETL step, XCom for data 
+      passing, and appropriatedependencies and trigger rules. (6 points)
