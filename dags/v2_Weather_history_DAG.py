@@ -107,9 +107,15 @@ def clean_func(**kwargs):
 def generate_daily_averages(df: DataFrame) -> DataFrame:
     daily_averages_df = df.resample("D").agg({
         "Temperature (C)": "mean",
+        "Apparent Temperature (C)": "mean",
         "Humidity": "mean",
-        "Wind Speed (km/h)": "mean"
+        "Wind Speed (km/h)": "mean",
+        "Visibility (km)": "mean",
+        "Pressure (millibars)": "mean"
     }).reset_index()
+
+    daily_mode_df = df[["Precip Type", "Wind Strength"]].resample("D").apply(lambda x: pd.Series.mode(x, dropna=False))
+    daily_averages_df = daily_averages_df.join(daily_mode_df) # Join the two seperate Dataframes together
 
     return daily_averages_df
 
@@ -119,7 +125,6 @@ def calculate_monthly_averages(df):
     #Make a dataframe of the monthly data
     monthly_df = df.groupby('YearMonth').agg({
         'Temperature (C)': 'mean',
-        ''
         'Humidity': 'mean',
         'Visibility (km)': 'mean',
         'Pressure (millibars)': 'mean'
@@ -135,7 +140,7 @@ def categorize_wind_strength(wind_speed):
 #Categorize wind speed
 
     if wind_speed <= 1.5:
-        return "calm"
+        return "Calm"
     elif wind_speed <= 3.3:
         return "Light Air"
     elif wind_speed <= 5.4:
@@ -288,7 +293,7 @@ def detect_outliers(df, columns, outlier_path, lower_q=0.01, upper_q=0.99):
     #Save outliers to csv if any.
     if not outlier_rows.empty:
         outlier_rows.to_csv(outlier_path, index=False)
-        print(f"Outliers logged to: {outlier_path}")
+        print(f"Outliers detected: {len(outliers_rows)} rows. Outliers saved to: {outlier_path}")
     else:
         print("No outliers detected.")
 
@@ -339,9 +344,6 @@ def validate_weather(**kwargs):
     if not ranges_ok:
         error_messages.extend(range_msgs)
 
-#    if outliers_found:
-#        error_messages.append(f"Outliers detected: {len(outliers)} rows. Outliers saved to: {outlier_path}")
-
     if error_messages:
         print("\nVALIDATION FAILED:")
         for msg in error_messages:
@@ -381,6 +383,12 @@ def load_weather(**kwargs):
 
     daily_df = daily_df.rename(columns={
         "Formatted Date": "formatted_date",
+        "Temperature (C)": "temperature_c",
+        "Apparent Temperature (C)": "apparent_temperature_c",
+        "Humidity": "humidity",
+        "Wind Speed (km/h)": "wind_speed_kmh",
+        "Visibility (km)": "visibility_km",
+        "Pressure (millibars)": "pressure_millibars",
         "Humidity": "avg_humidity",
         "Temperature (C)": "avg_temperature_c",
         "Wind Speed (km/h)": "avg_wind_speed_kmh"
@@ -399,8 +407,9 @@ def load_weather(**kwargs):
     monthly_df = pd.read_csv(monthly_path)
 
     monthly_df = monthly_df.rename(columns={
-        "year_month": "month",
+        "Formatted Date": "month",
         "Temperature (C)": "avg_temperature_c",
+        "Apparent Temperature (C)": "apparent_temperature_c",
         "Humidity": "avg_humidity",
         "Visibility (km)": "avg_visibility_km",
         "Pressure (millibars)": "avg_pressure_millibars",
