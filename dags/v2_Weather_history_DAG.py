@@ -24,7 +24,7 @@ default_args = {
 }
 
 dag = DAG(
-	'Historical_Weather_Teamwork',
+	'Historical_Weather_Teamwork_v2',
 	default_args = default_args,
 	schedule_interval = '@daily',
 	catchup = False,
@@ -66,7 +66,6 @@ def clean_func(**kwargs):
     extract_file_path = ti.xcom_pull(task_ids="extract_task", key="extract_file_path")
 
     df = pd.read_csv(extract_file_path)
-    # df = cleanse_data(df)
 
     critical_columns = [
         "Precip Type",
@@ -105,18 +104,6 @@ def clean_func(**kwargs):
 # TRANSFORM
 #==========
 
-def monthly_aggregation_mean_and_mode(df: DataFrame) -> DataFrame:
-    # Aggregate Precip Type mode values
-    monthly_mode_df = df[["Precip Type"]].resample("M").apply(lambda x: pd.Series.mode(x, dropna=False))
-
-    # Aggregate mean values
-    monthly_mean_df = df[['Temperature (C)', 'Humidity',  'Visibility (km)', 'Pressure (millibars)']].resample("M").mean()
-
-    # Join the two seperate Dataframes together
-    month_df = monthly_mean_df.join(monthly_mode_df)
-
-    return month_df
-
 def generate_daily_averages(df: DataFrame) -> DataFrame:
     daily_averages_df = df.resample("D").agg({
         "Temperature (C)": "mean",
@@ -126,20 +113,23 @@ def generate_daily_averages(df: DataFrame) -> DataFrame:
 
     return daily_averages_df
 
-def get_monthly_precipitation_type(df: DataFrame) -> DataFrame:
-    monthly_df = df[["Precip Type"]].resample("M").agg(pd.Series.mode)
-
-    return monthly_df
-
-
-
-# Wind strength categorization. Convert wind speed from km/h to m/s and categorize the instance of windspeed to different levels of wind strength.
-
-def convert_kmh_to_ms(df):
-    #Transform the windspeed from km/h to m/s
-    df['Wind Speed (m/s)'] = df['Wind Speed (km/h)'] / 3.6
+def calculate_monthly_averages(df):
+    df['YearMonth'] = df.index.to_period('M')
     
-    return df
+    #Make a dataframe of the monthly data
+    monthly_df = df.groupby('YearMonth').agg({
+        'Temperature (C)': 'mean',
+        ''
+        'Humidity': 'mean',
+        'Visibility (km)': 'mean',
+        'Pressure (millibars)': 'mean'
+    }).reset_index()
+
+    monthly_averages_df = pd.DataFrame(monthly_df)
+
+    return monthly_averages_df
+
+
     
 def categorize_wind_strength(wind_speed):
 #Categorize wind speed
@@ -169,48 +159,42 @@ def categorize_wind_strength(wind_speed):
     else:
         return "Violent Storm"
 
-def add_wind_strength_column(df):
-    #Create the wind strength column based on the converted wind speeds divided into categories.
-    df['Wind Strength'] = df['Wind Speed (m/s)'].apply((categorize_wind_strength))
-    
-    return df
-
-def calculate_monthly_averages(df):
-    df['YearMonth'] = df.index.to_period('M')
-    
-    #Make a dataframe of the monthly data
-    monthly_df = df.groupby('YearMonth').agg({
-        'Temperature (C)': 'mean',
-        'Humidity': 'mean',
-        'Visibility (km)': 'mean',
-        'Pressure (millibars)': 'mean'
-    }).reset_index()
-
-    monthly_averages_df = pd.DataFrame(monthly_df)
-
-    return monthly_averages_df
-
 
 def transform_weather(**kwargs):
     ti = kwargs["ti"]
     clean_file_path = ti.xcom_pull(task_ids="clean_task", key="clean_file_path")
     df = pd.read_csv(clean_file_path)
 
-    # Index data
-    df["Formatted Date"] = pd.to_datetime(df["Formatted Date"], format="%Y-%m-%d %H:%M:%S.%f %z", errors="coerce", utc=True)
+    # Convert Formatted Date to a proper date format & index data
+    df["Formatted Date"] = pd.to_datetime(df["Formatted Date"], 
+                                                format="%Y-%m-%d %H:%M:%S.%f %z", 
+                                                errors="coerce", 
+                                                utc=True)
     df = df.set_index("Formatted Date")
 
-    #Transformations and new columns
-    df = convert_kmh_to_ms(df)
-    df = add_wind_strength_column(df)
+    # Convert wind speed from km/h to m/s and categorize the instance of windspeed to different levels of wind strength.
+    df['Wind Speed (m/s)'] = df['Wind Speed (km/h)'] / 3.6
+    df['Wind Strength'] = df['Wind Speed (m/s)'].apply((categorize_wind_strength))
 
-    # Daily & monthly averages
+    #--- DAILY ---
     daily_df = generate_daily_averages(df)
+
+    #--- MONTHLY ---
     monthly_df = calculate_monthly_averages(df)
+
+    # Aggregate Precip Type mode values & monthly mean values
+    monthly_mode_df = df[["Precip Type"]].resample("M").apply(lambda x: pd.Series.mode(x, dropna=False))
+    monthly_mean_df = df[['Temperature (C)', 'Humidity',  'Visibility (km)', 'Pressure (millibars)']].resample("M").mean()
+    month_df = monthly_mean_df.join(monthly_mode_df) # Join the two seperate Dataframes together
+
+    # Get monthly precipitation type
+    monthly_df = df[["Precip Type"]].resample("M").agg(pd.Series.mode)
+    monthly_df["Mode Precip Type"] = month_df["Precip Type"] #rename column
 
     # Transform YearMonth to date type
     monthly_df["year_month"] = monthly_df["YearMonth"].dt.to_timestamp()
     monthly_df = monthly_df.drop(columns=["YearMonth"])
+
 
     # Daily and monthly averages paths
     daily_averages_path = '/tmp/daily_averages.csv'
@@ -399,24 +383,8 @@ def load_weather(**kwargs):
         "Formatted Date": "formatted_date",
         "Humidity": "avg_humidity",
         "Temperature (C)": "avg_temperature_c",
-        "Wind Speed (km/h)": "avg_wind_speed_kmh",
+        "Wind Speed (km/h)": "avg_wind_speed_kmh"
     })
-
-    """
-    id SERIAL PRIMARY KEY,
-    formatted_date TIMESTAMPTZ, 
- !  precip_type TEXT,               
- !  temperature_c DOUBLE PRECISION,
- !  apparent_temperature_c DOUBLE PRECISION,
- !  humidity DOUBLE PRECISION,
- !  wind_speed_kmh DOUBLE PRECISION,
- !  visibility_km DOUBLE PRECISION,
- !  pressure_millibars DOUBLE PRECISION,
-    wind_strength TEXT,
-    avg_temperature_c DOUBLE PRECISION,
-    avg_humidity DOUBLE PRECISION,
-    avg_wind_speed_kmh DOUBLE PRECISION
-    """
 
     daily_df.to_sql(
         'daily_weather',
@@ -436,19 +404,8 @@ def load_weather(**kwargs):
         "Humidity": "avg_humidity",
         "Visibility (km)": "avg_visibility_km",
         "Pressure (millibars)": "avg_pressure_millibars",
-        "Precip Type": "mode_precip_type" #should be "Mode Precip Type"
+        "Mode Precip Type": "mode_precip_type"
     })
-
-    """
-    id SERIAL PRIMARY KEY,
-    month DATE,      
-    avg_temperature_c DOUBLE PRECISION,
- !  avg_apparent_temperature_c DOUBLE PRECISION,
-    avg_humidity DOUBLE PRECISION,
-    avg_visibility_km DOUBLE PRECISION,
-    avg_pressure_millibars DOUBLE PRECISION,
- !  mode_precip_type TEXT
-    """
 
     monthly_df.to_sql(
         'monthly_weather',
