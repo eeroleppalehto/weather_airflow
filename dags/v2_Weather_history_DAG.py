@@ -180,20 +180,12 @@ def transform_weather(**kwargs):
     daily_df = generate_daily_averages(df)
 
     #--- MONTHLY ---
-    monthly_df = calculate_monthly_averages(df)
 
     # Aggregate Precip Type mode values & monthly mean values
     monthly_mode_df = df[["Precip Type"]].resample("M").apply(lambda x: pd.Series.mode(x, dropna=False))
-    monthly_mean_df = df[['Temperature (C)', 'Humidity',  'Visibility (km)', 'Pressure (millibars)']].resample("M").mean()
+    monthly_mean_df = df[['Temperature (C)', 'Humidity',  'Visibility (km)', 'Pressure (millibars)', 'Apparent Temperature (C)']].resample("M").mean()
     month_df = monthly_mean_df.join(monthly_mode_df) # Join the two seperate Dataframes together
 
-    # Get monthly precipitation type
-    monthly_df = df[["Precip Type"]].resample("M").agg(pd.Series.mode)
-    monthly_df["Mode Precip Type"] = month_df["Precip Type"] #rename column
-
-    # Transform YearMonth to date type
-    monthly_df["year_month"] = monthly_df["YearMonth"].dt.to_timestamp()
-    monthly_df = monthly_df.drop(columns=["YearMonth"])
 
 
     # Daily and monthly averages paths
@@ -201,8 +193,8 @@ def transform_weather(**kwargs):
     monthly_averages_path = '/tmp/monthly_averages.csv'
 
     #Daily and monthly to csv files
-    daily_df.to_csv(daily_averages_path, index=False)
-    monthly_df.to_csv(monthly_averages_path, index=False)
+    daily_df.to_csv(daily_averages_path)
+    month_df.to_csv(monthly_averages_path)
 
     #Changing the date index back to a column called "Formatted Date"
     df = df.copy()
