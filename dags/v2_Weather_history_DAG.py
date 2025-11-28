@@ -8,6 +8,7 @@ ETL pipeline for historical weather data
 
 import requests
 import io
+import os
 import psycopg2
 import pandas as pd
 from pandas import DataFrame
@@ -46,12 +47,15 @@ dag = DAG(
 
 KAGGLE_API_URL = "https://www.kaggle.com/api/v1/datasets/download/muthuj7/weather-dataset"
 TEMP_PATH = Path() / "tmp"
-TEMP_PATH.mkdir(parents=True, exist_ok=True)
+# TEMP_PATH.mkdir(parents=True, exist_ok=True)
 
 def extract_func(**kwargs):
     #Extract dataset from Kaggle API 
     response = requests.get(KAGGLE_API_URL, stream=True)
     bytes_io = io.BytesIO(response.content)
+
+    if not TEMP_PATH.exists():
+        os.mkdir(TEMP_PATH)
 
     #Handle any ZIP-files 
     with ZipFile(bytes_io, "r") as zip_file:
@@ -185,6 +189,7 @@ def transform_weather(**kwargs):
     
     # Aggregate Precip Type mode values 
     monthly_mode_df = df[["Precip Type"]].resample("M").apply(lambda x: pd.Series.mode(x, dropna=False))
+    monthly_mode_df["Precip Type"] = monthly_mode_df["Precip Type"].apply(lambda x: x if type(x) == str else np.nan)
     monthly_mode_df.rename(columns={"Precip Type": "Mode Precip Type"}, inplace=True)
     
     # Aggregate monthly mean values
@@ -203,8 +208,9 @@ def transform_weather(**kwargs):
     month_df["month"] = month_df.index.normalize()
 
     # Daily and monthly averages paths
-    daily_averages_path = '/tmp/daily_averages.csv'
-    monthly_averages_path = '/tmp/monthly_averages.csv'
+    daily_averages_path = TEMP_PATH / 'daily_averages.csv'
+
+    monthly_averages_path = TEMP_PATH / 'monthly_averages.csv'
 
     # Daily and monthly DataFrames to csv files
     daily_df.to_csv(daily_averages_path, index=False)
@@ -217,13 +223,14 @@ def transform_weather(**kwargs):
     df['Formatted Date'] = pd.to_datetime(df['Formatted Date'])  #Lastly ensure that "Formatted Date" column has proper dtype of datetime.
 
     #Transformed dataframe to csv file for easier pushing via xcom.
-    transformed_path = "/tmp/transformed_df.csv"
+    transformed_path = TEMP_PATH / 'transformed_df.csv'
+
     df.to_csv(transformed_path, index=False)
 
     #Xcom pushing the transformed df, monthly averages, and daily averages.
-    ti.xcom_push(key='daily_averages_file_path', value=daily_averages_path)
-    ti.xcom_push(key='monthly_averages_file_path', value=monthly_averages_path)
-    ti.xcom_push(key='transformed_file_path', value=transformed_path)
+    ti.xcom_push(key='daily_averages_file_path', value=str(daily_averages_path))
+    ti.xcom_push(key='monthly_averages_file_path', value=str(monthly_averages_path))
+    ti.xcom_push(key='transformed_file_path', value=str(transformed_path))
 
 
 #==========
@@ -332,7 +339,7 @@ def validate_weather(**kwargs):
 
     #Outlier validation
     numeric_columns= ["Temperature (C)", "Humidity", "Wind Speed (m/s)", "Pressure (millibars)", "Visibility (km)"]
-    outlier_path = "/tmp/outliers.csv"
+    outlier_path = TEMP_PATH / "outliers.csv"
     outliers_found, outliers = detect_outliers(df, numeric_columns, outlier_path)
 
     #Setting fail conditions for not progressing to load task.
@@ -351,11 +358,11 @@ def validate_weather(**kwargs):
         raise ValueError("Validation failed, see error messages above.")
 
     #If no failures, save validated df and continue with pushing paths to xcom.
-    validated_path = "/tmp/validated_weather.csv"
+    validated_path = TEMP_PATH / "validated_weather.csv"
     df.to_csv(validated_path, index=False)
 
-    ti.xcom_push(key='df_validated_path', value=validated_path)
-    ti.xcom_push(key='outlier_rows_path', value=outlier_path)
+    ti.xcom_push(key='df_validated_path', value=str(validated_path))
+    ti.xcom_push(key='outlier_rows_path', value=str(outlier_path))
 
     print("Validation successful, proceeding to load task.")
     return "Validation complete."
@@ -401,7 +408,7 @@ def load_weather(**kwargs):
         method='multi'
     )
 
-#---LOAD MONTHLY WEATHER---
+    #---LOAD MONTHLY WEATHER---
     monthly_df = pd.read_csv(monthly_path)
 
     # Rename according to SQL schema
